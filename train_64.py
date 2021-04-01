@@ -296,12 +296,14 @@ def main():
                                             minority_classes = None,
                                             keep_ratio = None)
         eval_loader = iter(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
-                                                    sampler=InfiniteSamplerWrapper(train_dataset),
+                                                    sampler=InfiniteSamplerWrapper(eval_dataset),
                                                      num_workers=args.num_workers,
                                                      pin_memory=True))
         # eval_loader = cycle(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
         #                                             shuffle = False,
         #                                              num_workers=args.num_workers))
+
+
     else:
         eval_loader = None
     num_classes = len(train_dataset.classes)
@@ -417,9 +419,11 @@ def main():
         if n_iter % args.eval_interval == 0:
             # TODO (crcrpar): implement Ineption score, FID, and Geometry score
             # Once these criterion are prepared, val_loader will be used.
+
             fid_score = evaluation.evaluate(
                 args, n_iter, gen, device, inception_model, eval_loader
             )
+
             tqdm.tqdm.write(
                 '[Eval] iteration: {:07d}/{:07d}, FID: {:07f}'.format(
                     n_iter, args.max_iteration, fid_score))

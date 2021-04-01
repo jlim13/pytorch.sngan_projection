@@ -1,1 +1,1 @@
-python train_64.py --cGAN --data_root data/ --calc_FID --batch_size 512
+python train_64.py --cGAN --data_root data/ --calc_FID --batch_size 256
