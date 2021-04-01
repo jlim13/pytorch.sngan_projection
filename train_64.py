@@ -24,6 +24,12 @@ from models.generators.resnet64 import ResNetGenerator
 from models import inception
 import utils
 
+from datasets import cifar10, mnist
+
+def cycle(iterable):
+    while True:
+        for x in iterable:
+            yield x
 
 # Copied from https://github.com/naoto0804/pytorch-AdaIN/blob/master/sampler.py#L5-L15
 def InfiniteSampler(n):
@@ -248,35 +254,61 @@ def main():
     def _noise_adder(img):
         return torch.empty_like(img, dtype=img.dtype).uniform_(0.0, 1/128.0) + img
 
-    # dataset
-    train_dataset = datasets.ImageFolder(
-        os.path.join(args.data_root, 'train'),
-        transforms.Compose([
-            transforms.ToTensor(), _rescale, _noise_adder,
-        ])
-    )
-    train_loader = iter(data.DataLoader(
-        train_dataset, args.batch_size,
-        sampler=InfiniteSamplerWrapper(train_dataset),
-        num_workers=args.num_workers, pin_memory=True)
-    )
+    minority_class_labels = []
+
+    train_transform = transforms.Compose([
+                    transforms.Resize(64),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                    ])
+
+    train_dataset = cifar10.CIFAR10(root='./data',
+                        train=True,
+                        download=True,
+                        transform=train_transform,
+                        minority_classes = minority_class_labels,
+                        keep_ratio = 0.1)
+    print (len(train_dataset))
+    train_loader = iter(torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
+                                            sampler=InfiniteSamplerWrapper(train_dataset),
+                                              num_workers=args.num_workers,
+                                            pin_memory=True))
+    # train_loader = cycle(torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
+    #                                         shuffle = True, num_workers=args.num_workers))
+
     if args.calc_FID:
-        eval_dataset = datasets.ImageFolder(
-            os.path.join(args.data_root, 'val'),
-            transforms.Compose([
-                transforms.ToTensor(), _rescale,
-            ])
-        )
-        eval_loader = iter(data.DataLoader(
-            eval_dataset, args.batch_size,
-            sampler=InfiniteSamplerWrapper(eval_dataset),
-            num_workers=args.num_workers, pin_memory=True)
-        )
+        # eval_dataset = datasets.ImageFolder(
+        #     os.path.join(args.data_root, 'val'),
+        #     transforms.Compose([
+        #         transforms.ToTensor(), _rescale,
+        #     ])
+        # )
+        # eval_loader = iter(data.DataLoader(
+        #     eval_dataset, args.batch_size,
+        #     sampler=InfiniteSamplerWrapper(eval_dataset),
+        #     num_workers=args.num_workers, pin_memory=True)
+        # )
+
+        eval_dataset = cifar10.CIFAR10(root=args.data_root,
+                                            train=False,
+                                            download=True,
+                                            transform=train_transform,
+                                            minority_classes = None,
+                                            keep_ratio = None)
+        eval_loader = iter(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
+                                                    sampler=InfiniteSamplerWrapper(train_dataset),
+                                                     num_workers=args.num_workers,
+                                                     pin_memory=True))
+        # eval_loader = cycle(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
+        #                                             shuffle = False,
+        #                                              num_workers=args.num_workers))
     else:
         eval_loader = None
     num_classes = len(train_dataset.classes)
+
     print(' prepared datasets...')
     print(' Number of training images: {}'.format(len(train_dataset)))
+
     # Prepare directories.
     args.num_classes = num_classes
     args, writer = prepare_results_dir(args)
@@ -294,6 +326,9 @@ def main():
             args.dis_num_features, _n_cls, F.relu).to(device)
     inception_model = inception.InceptionV3().to(device) if args.calc_FID else None
 
+    gen = torch.nn.DataParallel(gen)
+    dis = torch.nn.DataParallel(dis)
+
     opt_gen = optim.Adam(gen.parameters(), args.lr, (args.beta1, args.beta2))
     opt_dis = optim.Adam(dis.parameters(), args.lr, (args.beta1, args.beta2))
 
@@ -301,6 +336,7 @@ def main():
     # dis_criterion = getattr(L, 'dis_{}'.format(args.loss_type))
     gen_criterion = L.GenLoss(args.loss_type, args.relativistic_loss)
     dis_criterion = L.DisLoss(args.loss_type, args.relativistic_loss)
+
     print(' Initialized models...\n')
 
     if args.args_path is not None:
@@ -330,6 +366,7 @@ def main():
                     dis_real = None
 
                 loss_gen = gen_criterion(dis_fake, dis_real)
+
                 gen.zero_grad()
                 loss_gen.backward()
                 opt_gen.step()
@@ -365,10 +402,12 @@ def main():
                     'real', torchvision.utils.make_grid(
                         real, nrow=4, normalize=True, scale_each=True))
             # Save previews
+
             utils.save_images(
                 n_iter, n_iter // args.checkpoint_interval, args.results_root,
-                args.train_image_root, fake, real
+                args.train_image_root, fake[:32], real[:32]
             )
+
         if n_iter % args.checkpoint_interval == 0:
             # Save checkpoints!
             utils.save_checkpoints(
@@ -399,4 +438,5 @@ def main():
 
 
 if __name__ == '__main__':
+    torch.multiprocessing.set_start_method('spawn')
     main()
