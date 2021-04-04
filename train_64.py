@@ -254,7 +254,7 @@ def main():
     def _noise_adder(img):
         return torch.empty_like(img, dtype=img.dtype).uniform_(0.0, 1/128.0) + img
 
-    minority_class_labels = []
+    minority_class_labels = [0,1]
 
     train_transform = transforms.Compose([
                     transforms.Resize(64),
