@@ -57,66 +57,6 @@ class InfiniteSamplerWrapper(data.sampler.Sampler):
         return 2 ** 31
 
 
-def createOverSampler(train_dataset):
-
-    target = train_dataset.targets
-    print (target)
-    class_sample_count = np.unique(target, return_counts=True)[1]
-    print(class_sample_count)
-
-    # oversample class 0
-    class_sample_count = 250
-
-    weight = 1. / class_sample_count
-    samples_weight = weight[target]
-    samples_weight = torch.from_numpy(samples_weight)
-
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight, len(samples_weight), replacement=True)
-
-    return sampler
-
-
-def prepare_results_dir(args):
-    """Makedir, init tensorboard if required, save args."""
-    if args.test:
-        import tempfile
-        args.results_root = tempfile.mkdtemp()
-        args.max_iteration = 10
-        args.log_interval = 2
-        args.eval_interval = 10
-        args.n_fid_images = 100
-        args.n_eval_batches = 10
-    root = os.path.join(args.results_root, "cGAN" if args.cGAN else "SNGAN",
-                        datetime.datetime.now().strftime('%y%m%d_%H%M'))
-    os.makedirs(root, exist_ok=True)
-    if not args.no_tensorboard:
-        from tensorboardX import SummaryWriter
-        writer = SummaryWriter(root)
-    else:
-        writer = None
-
-    train_image_root = os.path.join(root, "preview", "train")
-    eval_image_root = os.path.join(root, "preview", "eval")
-    os.makedirs(train_image_root, exist_ok=True)
-    os.makedirs(eval_image_root, exist_ok=True)
-
-    args.results_root = root
-    args.train_image_root = train_image_root
-    args.eval_image_root = eval_image_root
-
-    if args.cGAN:
-        if args.num_classes > args.n_eval_batches:
-            args.n_eval_batches = args.num_classes
-    if args.eval_batch_size is None:
-        args.eval_batch_size = args.batch_size // 4
-
-    if args.calc_FID:
-        args.n_fid_batches = args.n_fid_images // args.batch_size
-
-    with open(os.path.join(root, 'args.json'), 'w') as f:
-        json.dump(args.__dict__, f, indent=2)
-    print(json.dumps(args.__dict__, indent=2))
-    return args, writer
 
 
 def decay_lr(opt, max_iter, start_iter, initial_lr):
@@ -181,7 +121,6 @@ def get_args():
                         help='If calculate FID score, set this ``True``. default: False')
     parser.add_argument('--transform_space', type=str, default=None,
                         help='Which space to smack a transformer')
-    parser.add_argument('--oversample', type = int, default = 0)
     # Log and Save interval configuration
     parser.add_argument('--results_root', type=str, default='results',
                         help='Path to results directory. default: results')
@@ -276,69 +215,30 @@ def main():
     def _noise_adder(img):
         return torch.empty_like(img, dtype=img.dtype).uniform_(0.0, 1/128.0) + img
 
-    minority_class_labels = [0,1,2,3,4]
-
-    train_transform = transforms.Compose([
-                    transforms.Resize(64),
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-                    ])
-
-    train_dataset = cifar10.CIFAR10(root='./data',
-                        train=True,
-                        download=True,
-                        transform=train_transform,
-                        minority_classes = minority_class_labels,
-                        keep_ratio = 0.05)
-
-    if args.oversample == 1:
-        oversampler = createOverSampler(train_dataset)
-        train_loader = cycle(torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
-                                                shuffle = False, num_workers=args.num_workers,sampler=oversampler))
-    else:
-        train_loader = iter(torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
-                                                sampler=InfiniteSamplerWrapper(train_dataset),
-                                                  num_workers=args.num_workers,
-                                                pin_memory=True))
-
-    if args.calc_FID:
-        # eval_dataset = datasets.ImageFolder(
-        #     os.path.join(args.data_root, 'val'),
-        #     transforms.Compose([
-        #         transforms.ToTensor(), _rescale,
-        #     ])
-        # )
-        # eval_loader = iter(data.DataLoader(
-        #     eval_dataset, args.batch_size,
-        #     sampler=InfiniteSamplerWrapper(eval_dataset),
-        #     num_workers=args.num_workers, pin_memory=True)
-        # )
-
-        eval_dataset = cifar10.CIFAR10(root=args.data_root,
-                                            train=False,
-                                            download=True,
-                                            transform=train_transform,
-                                            minority_classes = None,
-                                            keep_ratio = None)
-        eval_loader = iter(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
-                                                    sampler=InfiniteSamplerWrapper(eval_dataset),
-                                                    num_workers=args.num_workers,
-                                                     pin_memory=True))
-        # eval_loader = cycle(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
-        #                                             shuffle = False,
-        #                                              num_workers=args.num_workers))
 
 
-    else:
-        eval_loader = None
-    num_classes = len(train_dataset.classes)
+    eval_dataset = cifar10.CIFAR10(root=args.data_root,
+                                        train=False,
+                                        download=True,
+                                        transform=transforms.Compose([
+                                            transforms.Resize(64),
+                                            transforms.ToTensor(),
+                                            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                                            ]),
+                                        minority_classes = None,
+                                        keep_ratio = None)
+    eval_loader = iter(torch.utils.data.DataLoader(eval_dataset, batch_size=args.batch_size,
+                                                sampler=InfiniteSamplerWrapper(eval_dataset),
+                                                 num_workers=args.num_workers,
+                                                 pin_memory=True))
+
 
     print(' prepared datasets...')
-    print(' Number of training images: {}'.format(len(train_dataset)))
 
     # Prepare directories.
+    num_classes = len(eval_dataset.classes)
     args.num_classes = num_classes
-    args, writer = prepare_results_dir(args)
+
     # initialize models.
     _n_cls = num_classes if args.cGAN else 0
     gen = ResNetGenerator(
@@ -350,10 +250,9 @@ def main():
     else:
         dis = SNResNetProjectionDiscriminator(args.dis_num_features, _n_cls, F.relu, args.transform_space).to(device)
     inception_model = inception.InceptionV3().to(device) if args.calc_FID else None
-    
-    inception_model = torch.nn.DataParallel(inception_model)
+
     gen = torch.nn.DataParallel(gen)
-    dis = torch.nn.DataParallel(dis)
+    # dis = torch.nn.DataParallel(dis)
 
     opt_gen = optim.Adam(gen.parameters(), args.lr, (args.beta1, args.beta2))
     opt_dis = optim.Adam(dis.parameters(), args.lr, (args.beta1, args.beta2))
@@ -365,121 +264,21 @@ def main():
 
     print(' Initialized models...\n')
 
-    if args.args_path is not None:
+    if args.args_path is None:
+        print ("Please specify weights to load")
+        exit()
+    else:
         print(' Load weights...\n')
+
         prev_args, gen, opt_gen, dis, opt_dis = utils.resume_from_args(
             args.args_path, args.gen_ckpt_path, args.dis_ckpt_path
         )
+    args.n_fid_batches = args.n_eval_batches
+    fid_score = evaluation.evaluate(
+        args, 0, gen, device, inception_model, eval_loader, to_save=False
+    )
+    print (fid_score)
 
-    # Training loop
-    for n_iter in tqdm.tqdm(range(1, args.max_iteration + 1)):
-
-        if n_iter >= args.lr_decay_start:
-            decay_lr(opt_gen, args.max_iteration, args.lr_decay_start, args.lr)
-            decay_lr(opt_dis, args.max_iteration, args.lr_decay_start, args.lr)
-
-        # ==================== Beginning of 1 iteration. ====================
-        _l_g = .0
-        cumulative_loss_dis = .0
-        for i in range(args.n_dis):
-            if i == 0:
-                fake, pseudo_y, _ = sample_from_gen(args, device, num_classes, gen)
-                dis_fake = dis(fake, pseudo_y)
-                if args.relativistic_loss:
-                    real, y = sample_from_data(args, device, train_loader)
-                    dis_real = dis(real, y)
-                else:
-                    dis_real = None
-
-                loss_gen = gen_criterion(dis_fake, dis_real)
-
-                gen.zero_grad()
-                loss_gen.backward()
-                opt_gen.step()
-                _l_g += loss_gen.item()
-                if n_iter % 10 == 0 and writer is not None:
-                    writer.add_scalar('gen', _l_g, n_iter)
-
-            fake, pseudo_y, _ = sample_from_gen(args, device, num_classes, gen)
-            real, y = sample_from_data(args, device, train_loader)
-
-            dis_fake, dis_real = dis(fake, pseudo_y), dis(real, y)
-            loss_dis = dis_criterion(dis_fake, dis_real)
-
-
-            # for k,v in dis.named_parameters():
-            #     if "transformer.layers.1.linear1.bias" in k:
-            #         embedding_weights_a = v.clone()
-
-                # if "block5.c2.bias" in k:
-                #     embedding_weights_a = v.clone()
-            # print (embedding_weights_a)
-            dis.zero_grad()
-            loss_dis.backward()
-            opt_dis.step()
-            #
-            # for k,v in dis.named_parameters():
-            #     if "transformer.layers.1.linear1.bias" in k:
-            #         embedding_weights_b = v.clone()
-            #
-            #     # if "block5.c2.bias" in k:
-            #     #     embedding_weights_b = v.clone()
-            #
-            # print (torch.equal(embedding_weights_a.data, embedding_weights_b.data))
-
-            cumulative_loss_dis += loss_dis.item()
-            if n_iter % 10 == 0 and i == args.n_dis - 1 and writer is not None:
-                cumulative_loss_dis /= args.n_dis
-                writer.add_scalar('dis', cumulative_loss_dis / args.n_dis, n_iter)
-        # ==================== End of 1 iteration. ====================
-
-        if n_iter % args.log_interval == 0:
-            tqdm.tqdm.write(
-                'iteration: {:07d}/{:07d}, loss gen: {:05f}, loss dis {:05f}'.format(
-                    n_iter, args.max_iteration, _l_g, cumulative_loss_dis))
-            if not args.no_image:
-                writer.add_image(
-                    'fake', torchvision.utils.make_grid(
-                        fake, nrow=4, normalize=True, scale_each=True))
-                writer.add_image(
-                    'real', torchvision.utils.make_grid(
-                        real, nrow=4, normalize=True, scale_each=True))
-            # Save previews
-
-            utils.save_images(
-                n_iter, n_iter // args.checkpoint_interval, args.results_root,
-                args.train_image_root, fake[:32], real[:32]
-            )
-
-        if n_iter % args.checkpoint_interval == 0:
-            # Save checkpoints!
-            utils.save_checkpoints(
-                args, n_iter, n_iter // args.checkpoint_interval,
-                gen, opt_gen, dis, opt_dis
-            )
-        if n_iter % args.eval_interval == 0:
-            # TODO (crcrpar): implement Ineption score, FID, and Geometry score
-            # Once these criterion are prepared, val_loader will be used.
-
-            fid_score = evaluation.evaluate(
-                args, n_iter, gen, device, inception_model, eval_loader, to_save = True
-            )
-
-            tqdm.tqdm.write(
-                '[Eval] iteration: {:07d}/{:07d}, FID: {:07f}'.format(
-                    n_iter, args.max_iteration, fid_score))
-            if writer is not None:
-                writer.add_scalar("FID", fid_score, n_iter)
-                # Project embedding weights if exists.
-                embedding_layer = getattr(dis, 'l_y', None)
-                if embedding_layer is not None:
-                    writer.add_embedding(
-                        embedding_layer.weight.data,
-                        list(range(args.num_classes)),
-                        global_step=n_iter
-                    )
-    if args.test:
-        shutil.rmtree(args.results_root)
 
 
 if __name__ == '__main__':
