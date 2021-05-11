@@ -197,12 +197,11 @@ def resume_from_args(args_path, gen_ckpt_path, dis_ckpt_path):
     opt_dis = torch.optim.Adam(
         dis.parameters(), args['lr'], (args['beta1'], args['beta2'])
     )
-    if not os.path.exists(gen_ckpt_path):
-        gen_ckpt_path = os.path.join(args['results_root'], gen_ckpt_path)
+
+    gen = torch.nn.DataParallel(gen)
     gen, opt_gen = load_model_optim(gen_ckpt_path, gen, opt_gen)
-    if not os.path.exists(dis_ckpt_path):
-        dis_ckpt_path = os.path.join(args['results_root'], dis_ckpt_path)
-    dis, opt_dis = load_model_optim(dis_ckpt_path, dis, opt_dis)
+    # dis, opt_dis = load_model_optim(dis_ckpt_path, dis, opt_dis)
+
     return Dict2Args(args), gen, opt_gen, dis, opt_dis
 
 
